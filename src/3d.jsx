@@ -345,37 +345,34 @@ const ParticleGestureSystem = () => {
         const currentPattern = threeRefs.current.currentPattern;
 
         if (hasHand) {
-            // when a hand is detected: rotate according to hand direction
+            // Hand detected: smooth rotation based on hand position
             const targetRotX = threeRefs.current.rotationXTarget ?? 0;
             const targetRotY = threeRefs.current.rotationYTarget ?? 0;
 
-            particlesRotation.x = lerp(particlesRotation.x, targetRotX, 0.15);
-            particlesRotation.y = lerp(particlesRotation.y, targetRotY, 0.15);
+            particlesRotation.x = lerp(particlesRotation.x, targetRotX, 0.1);
+            particlesRotation.y = lerp(particlesRotation.y, targetRotY, 0.1);
+            particlesRotation.z = lerp(particlesRotation.z, 0, 0.1);
         } else {
-            // when no hand: idle rotation
-            const timeSpin = Date.now() * 0.0001;
-
+            // No hand: idle rotation with pattern-specific tilt angles
             if (currentPattern === 'galaxy') {
-                // galaxy: fixed tilt, then spin around Y
+                // Galaxy: tilted view
                 const baseTiltX = Math.PI / 8;   // tilt towards user
                 const baseTiltZ = Math.PI / 10;  // left high, right low
-                particlesRotation.x = baseTiltX;
-                particlesRotation.z = baseTiltZ;
-                particlesRotation.y = timeSpin;
+                particlesRotation.x = lerp(particlesRotation.x, baseTiltX, 0.1);
+                particlesRotation.z = lerp(particlesRotation.z, baseTiltZ, 0.1);
             } else if (currentPattern === 'torus') {
-                // torus: also slightly tilted, then spin around Y
+                // Torus: slightly tilted view
                 const baseTiltX = Math.PI / 8;
                 const baseTiltZ = Math.PI / 14;
-                particlesRotation.x = baseTiltX;
-                particlesRotation.z = baseTiltZ;
-                particlesRotation.y = timeSpin;
+                particlesRotation.x = lerp(particlesRotation.x, baseTiltX, 0.1);
+                particlesRotation.z = lerp(particlesRotation.z, baseTiltZ, 0.1);
             } else {
-                // all other patterns: keep perfectly horizontal rotation
-                // slowly restore X/Z back to 0 in case hand gesture tilted them
-                particlesRotation.x = lerp(particlesRotation.x, 0, 0.15);
-                particlesRotation.z = lerp(particlesRotation.z, 0, 0.15);
-                particlesRotation.y += 0.001; // pure horizontal spin
+                // Other patterns: horizontal position
+                particlesRotation.x = lerp(particlesRotation.x, 0, 0.1);
+                particlesRotation.z = lerp(particlesRotation.z, 0, 0.1);
             }
+            // Continuous rotation around Y axis for all patterns
+            particlesRotation.y += 0.001;
         }
 
         renderer.render(scene, camera);
@@ -525,6 +522,9 @@ const ParticleGestureSystem = () => {
             if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
                 const landmarks = results.multiHandLandmarks[0];
 
+                // Check if this is the first detection
+                const isFirstDetection = !threeRefs.current.isHandDetected;
+
                 // key points for scale
                 const t = landmarks[4];
                 const i = landmarks[8];
@@ -545,9 +545,8 @@ const ParticleGestureSystem = () => {
                         1,
                         Math.max(0, (normalizedDist - minNorm) / (maxNorm - minNorm))
                     );
-                    const targetScale = lerp(minScale, maxScale, clamped);
 
-                    threeRefs.current.handScaleTarget = targetScale;
+                    threeRefs.current.handScaleTarget = lerp(minScale, maxScale, clamped);
                     threeRefs.current.isHandDetected = true;
 
                     // use middle finger base as reference for rotation control
@@ -561,9 +560,29 @@ const ParticleGestureSystem = () => {
                     const maxRotY = Math.PI / 4; // 45 degrees left/right
                     const maxRotX = Math.PI / 6; // 30 degrees up/down
 
-                    // invert Y so that moving hand up rotates shape upward
-                    threeRefs.current.rotationYTarget = normX * maxRotY;
-                    threeRefs.current.rotationXTarget = -normY * maxRotX;
+                    // Invert Y so that moving hand up rotates shape upward
+                    const newRotY = normX * maxRotY;
+                    const newRotX = -normY * maxRotX;
+
+                    // If first detection, initialize to current rotation to prevent jumps
+                    if (isFirstDetection && threeRefs.current.particles) {
+                        const currentRot = threeRefs.current.particles.rotation;
+                        threeRefs.current.rotationXTarget = currentRot.x;
+                        threeRefs.current.rotationYTarget = currentRot.y;
+                    }
+
+                    // Smoothly update rotation targets (extra smoothing at source)
+                    const smoothing = isFirstDetection ? 0.05 : 0.2;
+                    threeRefs.current.rotationXTarget = lerp(
+                        threeRefs.current.rotationXTarget ?? newRotX,
+                        newRotX,
+                        smoothing
+                    );
+                    threeRefs.current.rotationYTarget = lerp(
+                        threeRefs.current.rotationYTarget ?? newRotY,
+                        newRotY,
+                        smoothing
+                    );
                 }
             } else {
                 // no hand detected: reset scale and rotation targets
