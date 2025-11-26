@@ -1,7 +1,8 @@
 {
-  "name": "particle-gesture-system",
+  "name": "star-wave",
+  "private": true,
   "version": "1.0.0",
-  "description": "基于 Three.js 的手势实时交互 3D 粒子系统",
+  "description": "Real-time hand gesture controlled 3D particle system powered by Three.js and MediaPipe",
   "type": "module",
   "scripts": {
     "dev": "vite",

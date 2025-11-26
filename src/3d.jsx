@@ -649,7 +649,7 @@ const ParticleGestureSystem = () => {
             {showControls && (
                 <div className="absolute top-4 left-4 bg-gray-800/90 backdrop-blur-md text-white p-6 rounded-2xl shadow-2xl max-w-sm z-10 border border-gray-700">
                     <h2 className="text-2xl font-bold mb-6 text-cyan-400 flex items-center gap-2">
-                        <span>✨</span> 粒子控制面板
+                        <span>✨</span> StarWave
                     </h2>
 
                     {/* pattern selection */}
