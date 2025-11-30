@@ -26,9 +26,80 @@ const generateParticleTexture = () => {
     return new THREE.CanvasTexture(canvas);
 };
 
+// extract particle positions from canvas drawing
+const extractParticlesFromCanvas = (canvas, count) => {
+    if (!canvas) return null;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const pixels = imageData.data;
+    const width = canvas.width;
+    const height = canvas.height;
+
+    // Collect all drawn pixels
+    const drawnPixels = [];
+    for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+            const index = (y * width + x) * 4;
+            // Check if pixel is white or has any color (not black)
+            const r = pixels[index];
+            const g = pixels[index + 1];
+            const b = pixels[index + 2];
+            const alpha = pixels[index + 3];
+
+            if (alpha > 50 && (r > 50 || g > 50 || b > 50)) { // Threshold for drawn pixels
+                drawnPixels.push({ x, y });
+            }
+        }
+    }
+
+    console.log('Drawn pixels found:', drawnPixels.length);
+
+    if (drawnPixels.length === 0) {
+        // Return a small default pattern if nothing drawn
+        const defaultParticles = [];
+        for (let i = 0; i < count; i++) {
+            defaultParticles.push({
+                x: (Math.random() - 0.5) * 0.2,
+                y: (Math.random() - 0.5) * 0.2,
+                z: (Math.random() - 0.5) * 0.1
+            });
+        }
+        return defaultParticles;
+    }
+
+    // Sample particles from drawn pixels
+    const particles = [];
+    const step = Math.max(1, Math.floor(drawnPixels.length / count));
+
+    for (let i = 0; i < drawnPixels.length && particles.length < count; i += step) {
+        const pixel = drawnPixels[i];
+
+        // Convert pixel coordinates to 3D space (-1 to 1)
+        const x = (pixel.x / width - 0.5) * 2;
+        const y = -(pixel.y / height - 0.5) * 2; // Flip Y
+        const z = (Math.random() - 0.5) * 0.3; // Small Z variation
+
+        particles.push({ x, y, z });
+    }
+
+    // Fill remaining particles if needed
+    while (particles.length < count) {
+        const randomPixel = drawnPixels[Math.floor(Math.random() * drawnPixels.length)];
+        particles.push({
+            x: (randomPixel.x / width - 0.5) * 2,
+            y: -(randomPixel.y / height - 0.5) * 2,
+            z: (Math.random() - 0.5) * 0.3
+        });
+    }
+
+    return particles;
+};
+
 // generate particle positions / sizes / colors
-// generate particle positions / sizes / colors
-const generateParticleData = (pattern, count) => {
+const generateParticleData = (pattern, count, customCanvas = null) => {
     const positions = new Float32Array(count * 3);
     const targetPositions = new Float32Array(count * 3);
     const sizes = new Float32Array(count);
@@ -37,6 +108,7 @@ const generateParticleData = (pattern, count) => {
 
     let scale = 3;
     if (pattern === 'heart' || pattern === 'cube') scale = 2;
+    if (pattern === 'custom') scale = 4;
 
     for (let i = 0; i < count; i++) {
         const i3 = i * 3;
@@ -203,6 +275,22 @@ const generateParticleData = (pattern, count) => {
                 break;
             }
 
+            case 'custom': {
+                // Custom drawn pattern from canvas
+                // Note: customParticles is pre-computed outside the loop
+                if (window.customParticlesCache && window.customParticlesCache[i]) {
+                    const p = window.customParticlesCache[i];
+                    pos.set(p.x * scale, p.y * scale, p.z * scale);
+                } else {
+                    // Fallback: small sphere
+                    const phi = Math.acos(-1 + (2 * i) / count);
+                    const theta = Math.sqrt(count * Math.PI) * phi;
+                    const r = Math.pow(Math.random(), 1 / 3) * scale * 0.5;
+                    pos.setFromSphericalCoords(r, phi, theta);
+                }
+                break;
+            }
+
             default: {
                 // fallback: solid-ish sphere
                 const phi = Math.acos(-1 + (2 * i) / count);
@@ -268,12 +356,13 @@ const fragmentShader = `
 const PARTICLE_COUNT = 15000;
 
 const PATTERNS = [
-    { value: 'heart', label: '心形', icon: '❤️' },
-    { value: 'cube', label: '立方体', icon: '⬛' },
-    { value: 'sphere', label: '球体', icon: '⚪' },
-    { value: 'torus', label: '圆环', icon: '⭕' },
-    { value: 'galaxy', label: '星系', icon: '🌌' },
-    { value: 'wave', label: '波浪', icon: '🌊' }
+    { value: 'heart', label: 'Heart', icon: '❤️' },
+    { value: 'cube', label: 'Cube', icon: '⬛' },
+    { value: 'sphere', label: 'Sphere', icon: '⚪' },
+    { value: 'torus', label: 'Torus', icon: '⭕' },
+    { value: 'galaxy', label: 'Galaxy', icon: '🌌' },
+    { value: 'wave', label: 'Wave', icon: '🌊' },
+    { value: 'custom', label: 'Draw', icon: '✏️' }
 ];
 
 // load external script once
@@ -297,6 +386,7 @@ const loadScript = (src, id) =>
 const ParticleGestureSystem = () => {
     const containerRef = useRef(null);
     const videoRef = useRef(null);
+    const drawCanvasRef = useRef(null);
 
     const [isWebcamActive, setIsWebcamActive] = useState(false);
     const [selectedPattern, setSelectedPattern] = useState('heart');
@@ -306,6 +396,8 @@ const ParticleGestureSystem = () => {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [showControls, setShowControls] = useState(true);
     const [isMediaPipeReady, setIsMediaPipeReady] = useState(false);
+    const [showDrawPanel, setShowDrawPanel] = useState(false);
+    const [isDrawing, setIsDrawing] = useState(false);
 
     const threeRefs = useRef({});
     const mediaPipeRefs = useRef({});
@@ -393,7 +485,7 @@ const ParticleGestureSystem = () => {
             .then(() => setIsMediaPipeReady(true))
             .catch(err => {
                 console.error('Failed to load MediaPipe scripts:', err);
-                alert('加载手势识别库失败，请刷新页面重试。');
+                alert('Failed to load gesture recognition library. Please refresh the page.');
             });
     }, []);
 
@@ -421,7 +513,8 @@ const ParticleGestureSystem = () => {
 
         const { positions, targetPositions, sizes, colors } = generateParticleData(
             selectedPattern,
-            PARTICLE_COUNT
+            PARTICLE_COUNT,
+            drawCanvasRef.current
         );
 
         const geometry = new THREE.BufferGeometry();
@@ -613,9 +706,28 @@ const ParticleGestureSystem = () => {
     // update pattern
     useEffect(() => {
         if (!threeRefs.current.geometry) return;
+
+        // Show draw panel when custom pattern is selected
+        if (selectedPattern === 'custom') {
+            setShowDrawPanel(true);
+            // Pre-compute custom particles if canvas exists
+            if (drawCanvasRef.current && window.customParticlesCache) {
+                const { targetPositions } = generateParticleData(
+                    selectedPattern,
+                    PARTICLE_COUNT,
+                    drawCanvasRef.current
+                );
+                threeRefs.current.geometry.attributes.a_target.copyArray(targetPositions);
+                threeRefs.current.geometry.attributes.a_target.needsUpdate = true;
+            }
+            threeRefs.current.currentPattern = selectedPattern;
+            return;
+        }
+
         const { targetPositions } = generateParticleData(
             selectedPattern,
-            PARTICLE_COUNT
+            PARTICLE_COUNT,
+            drawCanvasRef.current
         );
         threeRefs.current.geometry.attributes.a_target.copyArray(targetPositions);
         threeRefs.current.geometry.attributes.a_target.needsUpdate = true;
@@ -633,6 +745,109 @@ const ParticleGestureSystem = () => {
         if (!threeRefs.current.material) return;
         threeRefs.current.material.uniforms.u_color.value.set(particleColor);
     }, [particleColor]);
+
+    // drawing canvas handlers
+    const initDrawCanvas = useCallback(() => {
+        const canvas = drawCanvasRef.current;
+        if (!canvas) return;
+
+        canvas.width = 300;
+        canvas.height = 300;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        // Initialize cache with empty canvas (small sphere)
+        if (!window.customParticlesCache) {
+            window.customParticlesCache = extractParticlesFromCanvas(canvas, PARTICLE_COUNT);
+        }
+    }, []);
+
+    const clearDrawCanvas = () => {
+        const canvas = drawCanvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Update cache after clearing
+        window.customParticlesCache = extractParticlesFromCanvas(canvas, PARTICLE_COUNT);
+        applyDrawing();
+    };
+
+    const applyDrawing = () => {
+        if (!threeRefs.current.geometry || !drawCanvasRef.current) return;
+
+        // Pre-compute particles from canvas (only once)
+        const particles = extractParticlesFromCanvas(
+            drawCanvasRef.current,
+            PARTICLE_COUNT
+        );
+
+        console.log('Extracted particles:', particles?.length, 'First particle:', particles?.[0]);
+        window.customParticlesCache = particles;
+
+        const { targetPositions } = generateParticleData(
+            'custom',
+            PARTICLE_COUNT,
+            drawCanvasRef.current
+        );
+        threeRefs.current.geometry.attributes.a_target.copyArray(targetPositions);
+        threeRefs.current.geometry.attributes.a_target.needsUpdate = true;
+    };
+
+    const handleDrawStart = (e) => {
+        e.preventDefault();
+        setIsDrawing(true);
+        const canvas = drawCanvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX ?? e.touches?.[0]?.clientX) - rect.left;
+        const y = (e.clientY ?? e.touches?.[0]?.clientY) - rect.top;
+        const ctx = canvas.getContext('2d');
+
+        // Ensure stroke style is set
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 3;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+    };
+
+    const handleDrawMove = (e) => {
+        e.preventDefault();
+        if (!isDrawing) return;
+        const canvas = drawCanvasRef.current;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (e.clientX ?? e.touches?.[0]?.clientX) - rect.left;
+        const y = (e.clientY ?? e.touches?.[0]?.clientY) - rect.top;
+        const ctx = canvas.getContext('2d');
+        ctx.lineTo(x, y);
+        ctx.stroke();
+    };
+
+    const handleDrawEnd = () => {
+        setIsDrawing(false);
+    };
+
+    useEffect(() => {
+        if (showDrawPanel) {
+            initDrawCanvas();
+            // Apply initial drawing after canvas is ready
+            setTimeout(() => {
+                if (selectedPattern === 'custom') {
+                    applyDrawing();
+                }
+            }, 100);
+        }
+    }, [showDrawPanel, initDrawCanvas]);
 
     // fullscreen toggle
     const toggleFullscreen = () => {
@@ -661,7 +876,7 @@ const ParticleGestureSystem = () => {
                 onClick={() => setShowControls(!showControls)}
                 className="absolute top-4 right-4 bg-gray-800/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-all shadow-lg z-20"
             >
-                {showControls ? '隐藏控制' : '显示控制'}
+                {showControls ? 'Hide Controls' : 'Show Controls'}
             </button>
 
             {/* control panel */}
@@ -674,7 +889,7 @@ const ParticleGestureSystem = () => {
                     {/* pattern selection */}
                     <div className="mb-6">
                         <label className="block text-sm font-semibold mb-3 text-gray-300">
-                            选择图案
+                            Select Pattern
                         </label>
                         <div className="grid grid-cols-3 gap-2">
                             {PATTERNS.map(pattern => (
@@ -697,7 +912,7 @@ const ParticleGestureSystem = () => {
                     {/* color picker */}
                     <div className="mb-6">
                         <label className="block text-sm font-semibold mb-3 text-gray-300">
-                            粒子颜色
+                            Particle Color
                         </label>
                         <div className="flex gap-2 items-center">
                             <input
@@ -715,7 +930,7 @@ const ParticleGestureSystem = () => {
                     {/* gesture control */}
                     <div className="mb-6">
                         <label className="block text-sm font-semibold mb-3 text-gray-300">
-                            手势控制
+                            Gesture Control
                         </label>
                         <button
                             onClick={() => setIsWebcamActive(!isWebcamActive)}
@@ -725,13 +940,13 @@ const ParticleGestureSystem = () => {
                                     : 'bg-green-500 hover:bg-green-600 shadow-lg shadow-green-500/30'
                             }`}
                         >
-                            {isWebcamActive ? '🔴 停止摄像头' : '🎥 启动摄像头'}
+                            {isWebcamActive ? '🔴 Stop Camera' : '🎥 Start Camera'}
                         </button>
 
                         {isWebcamActive && (
                             <div className="mt-3 bg-gray-700 p-3 rounded-xl">
                                 <div className="text-xs text-gray-400 mb-2">
-                                    手势缩放 + 旋转控制
+                                    Gesture Scale + Rotation
                                 </div>
                                 <div className="flex items-center gap-2">
                                     <div className="flex-1 bg-gray-600 h-2 rounded-full overflow-hidden">
@@ -745,9 +960,9 @@ const ParticleGestureSystem = () => {
                   </span>
                                 </div>
                                 <div className="mt-2 text-xs text-gray-400">
-                                    左右移动手：控制左右旋转；
+                                    Move hand left/right: rotate Y-axis
                                     <br />
-                                    上下移动手：控制上下旋转。
+                                    Move hand up/down: rotate X-axis
                                 </div>
                             </div>
                         )}
@@ -758,14 +973,68 @@ const ParticleGestureSystem = () => {
                         onClick={toggleFullscreen}
                         className="w-full py-3 px-4 bg-purple-600 hover:bg-purple-700 rounded-xl font-semibold transition-all shadow-lg shadow-purple-500/30"
                     >
-                        {isFullscreen ? '⤶ 退出全屏' : '⤢ 进入全屏'}
+                        {isFullscreen ? '⤶ Exit Fullscreen' : '⤢ Fullscreen'}
                     </button>
 
                     <div className="mt-4 text-xs text-gray-400 bg-gray-700/50 p-3 rounded-xl">
-                        💡 <strong>提示:</strong> 启动摄像头后，通过
-                        <strong>手掌的张开与合拢</strong>控制缩放，
-                        左右/上下移动手控制图案旋转。
+                        💡 <strong>Tip:</strong> Pinch fingers to scale.
+                        Move hand to rotate the pattern.
                     </div>
+                </div>
+            )}
+
+            {/* drawing panel */}
+            {showDrawPanel && (
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-gray-800/95 backdrop-blur-md p-6 rounded-2xl shadow-2xl z-30 border border-cyan-500">
+                    <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-xl font-bold text-cyan-400">Draw Your Pattern</h3>
+                        <button
+                            onClick={() => setShowDrawPanel(false)}
+                            className="text-gray-400 hover:text-white text-2xl leading-none"
+                        >
+                            ×
+                        </button>
+                    </div>
+
+                    <canvas
+                        ref={drawCanvasRef}
+                        width="300"
+                        height="300"
+                        style={{ width: '300px', height: '300px' }}
+                        className="border-2 border-gray-600 rounded-lg cursor-crosshair bg-black mb-4"
+                        onMouseDown={handleDrawStart}
+                        onMouseMove={handleDrawMove}
+                        onMouseUp={handleDrawEnd}
+                        onMouseLeave={handleDrawEnd}
+                        onTouchStart={handleDrawStart}
+                        onTouchMove={handleDrawMove}
+                        onTouchEnd={handleDrawEnd}
+                    />
+
+                    <div className="flex gap-2 mb-2">
+                        <button
+                            onClick={clearDrawCanvas}
+                            className="flex-1 py-2 px-4 bg-red-600 hover:bg-red-700 rounded-lg font-semibold transition-all"
+                        >
+                            Clear
+                        </button>
+                        <button
+                            onClick={applyDrawing}
+                            className="flex-1 py-2 px-4 bg-green-600 hover:bg-green-700 rounded-lg font-semibold transition-all"
+                        >
+                            Apply
+                        </button>
+                    </div>
+                    <button
+                        onClick={() => setShowDrawPanel(false)}
+                        className="w-full py-2 px-4 bg-cyan-600 hover:bg-cyan-700 rounded-lg font-semibold transition-all"
+                    >
+                        Close
+                    </button>
+
+                    <p className="text-xs text-gray-400 mt-3 text-center">
+                        Draw your pattern, then click <strong className="text-white">Apply</strong> to update particles
+                    </p>
                 </div>
             )}
 
@@ -774,7 +1043,7 @@ const ParticleGestureSystem = () => {
                 <div className="absolute bottom-4 right-4 flex gap-2 z-10">
                     <div className="bg-red-500/80 backdrop-blur-sm text-white px-3 py-2 rounded-lg flex items-center gap-2 shadow-lg animate-pulse">
                         <div className="w-2 h-2 bg-white rounded-full" />
-                        <span className="text-sm font-semibold">摄像头运行中</span>
+                        <span className="text-sm font-semibold">Camera Active</span>
                     </div>
                 </div>
             )}
