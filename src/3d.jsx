@@ -365,6 +365,16 @@ const PATTERNS = [
     { value: 'custom', label: 'Draw', icon: '✏️' }
 ];
 
+// MediaPipe hand landmark connections
+const HAND_CONNECTIONS = [
+    [0, 1], [1, 2], [2, 3], [3, 4],  // thumb
+    [0, 5], [5, 6], [6, 7], [7, 8],  // index finger
+    [0, 9], [9, 10], [10, 11], [11, 12],  // middle finger
+    [0, 13], [13, 14], [14, 15], [15, 16],  // ring finger
+    [0, 17], [17, 18], [18, 19], [19, 20],  // pinky
+    [5, 9], [9, 13], [13, 17]  // palm
+];
+
 // load external script once
 const loadScript = (src, id) =>
     new Promise((resolve, reject) => {
@@ -387,6 +397,7 @@ const ParticleGestureSystem = () => {
     const containerRef = useRef(null);
     const videoRef = useRef(null);
     const drawCanvasRef = useRef(null);
+    const previewCanvasRef = useRef(null);
 
     const [isWebcamActive, setIsWebcamActive] = useState(false);
     const [selectedPattern, setSelectedPattern] = useState('heart');
@@ -612,6 +623,47 @@ const ParticleGestureSystem = () => {
         });
 
         hands.onResults(results => {
+            // Draw video and hand landmarks on preview canvas
+            const canvas = previewCanvasRef.current;
+            if (canvas && videoRef.current) {
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                    // Clear canvas
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                    // Draw video frame (mirrored for selfie mode)
+                    ctx.save();
+                    ctx.scale(-1, 1);
+                    ctx.drawImage(videoRef.current, -canvas.width, 0, canvas.width, canvas.height);
+                    ctx.restore();
+
+                    // Draw hand landmarks if detected
+                    if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
+                        const landmarks = results.multiHandLandmarks[0];
+
+                        // Draw connections
+                        ctx.strokeStyle = '#00FF00';
+                        ctx.lineWidth = 2;
+                        HAND_CONNECTIONS.forEach(([start, end]) => {
+                            const startPoint = landmarks[start];
+                            const endPoint = landmarks[end];
+                            ctx.beginPath();
+                            ctx.moveTo(startPoint.x * canvas.width, startPoint.y * canvas.height);
+                            ctx.lineTo(endPoint.x * canvas.width, endPoint.y * canvas.height);
+                            ctx.stroke();
+                        });
+
+                        // Draw landmarks as circles (with mirrored X coordinates)
+                        ctx.fillStyle = '#FF0000';
+                        landmarks.forEach(landmark => {
+                            ctx.beginPath();
+                            ctx.arc((landmark.x) * canvas.width, landmark.y * canvas.height, 3, 0, 2 * Math.PI);
+                            ctx.fill();
+                        });
+                    }
+                }
+            }
+
             if (results.multiHandLandmarks && results.multiHandLandmarks[0]) {
                 const landmarks = results.multiHandLandmarks[0];
 
@@ -871,10 +923,25 @@ const ParticleGestureSystem = () => {
             {/* hidden video for MediaPipe */}
             <video ref={videoRef} autoPlay playsInline muted className="hidden" />
 
+            {/* camera preview with hand tracking overlay */}
+            {isWebcamActive && (
+                <div className="absolute top-4 right-4 bg-gray-800/90 backdrop-blur-md rounded-xl shadow-2xl overflow-hidden border-2 border-cyan-500/50 z-20">
+                    <canvas
+                        ref={previewCanvasRef}
+                        width="320"
+                        height="240"
+                        className="block"
+                    />
+                    <div className="absolute bottom-2 left-2 bg-black/60 text-white text-xs px-2 py-1 rounded">
+                        Hand Tracking
+                    </div>
+                </div>
+            )}
+
             {/* toggle control panel */}
             <button
                 onClick={() => setShowControls(!showControls)}
-                className="absolute top-4 right-4 bg-gray-800/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-all shadow-lg z-20"
+                className="absolute top-4 left-1/2 -translate-x-1/2 bg-gray-800/80 backdrop-blur-sm text-white px-4 py-2 rounded-lg hover:bg-gray-700 transition-all shadow-lg z-20"
             >
                 {showControls ? 'Hide Controls' : 'Show Controls'}
             </button>
